@@ -5,8 +5,8 @@ import {createGateway} from '../src/gateway.mjs';
 const secret='synthetic-only';
 const sign=x=>'sha256='+createHmac('sha256',secret).update(x).digest('hex');
 const valid={event_id:'test-1',consent_granted:true,consent_timestamp:'2026-11-17T00:00:00Z',consent_source:'synthetic'};
-function setup(remote={findByExternalId:async()=>null,create:async()=>({id:'remote'})},clock=()=>10000){
- const rows=new Map();
+function setup(remote={idempotencyGuaranteed:true,findByExternalId:async()=>null,create:async()=>({id:'remote'})},clock=()=>10000){
+ remote.idempotencyGuaranteed=true; // synthetic remote explicitly guarantees idempotency\n const rows=new Map();
  const store={
   async insertIfAbsent(e){if(rows.has(e.id))return false;rows.set(e);return true},
   async claim(id,token,now){const e=rows.get(id);if(!e||!['pending','retry'].includes(e.state)||e.nextAttemptAt>now)return null;e.state='processing';e.token=token;return {...e}},
