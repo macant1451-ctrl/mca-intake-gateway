@@ -22,13 +22,13 @@ export function createGateway({store,secret,remote,now=()=>Date.now()}) {
     const event=await store.claim(id,token,now());
     if(!event) return false;
     try {
-      const existing=await remote.findByExternalId(event.id);
+      // A stable external ID alone is insufficient: downstream MUST enforce idempotency.\n      if(remote.idempotencyGuaranteed!==true) throw Error('downstream_idempotency_not_verified');\n      const existing=await remote.findByExternalId(event.id);
       const record=existing??await remote.create({...event.payload,external_id:event.id});
       if(!record?.id) throw Error('remote_id_missing');
-      await store.complete(id,token,record.id);
+      await store.complete(id,token,record.id,event.leaseVersion);
     } catch {
       const attempts=event.attempts+1;
-      await store.fail(id,token,{attempts,state:attempts>=5?'dead_letter':'retry',nextAttemptAt:now()+Math.min(3600000,1000*2**attempts),errorCode:'delivery_failed'});
+      await store.fail(id,token,{attempts,state:attempts>=5?'dead_letter':'retry',nextAttemptAt:now()+Math.min(3600000,1000*2**attempts),errorCode:'delivery_failed'},event.leaseVersion);
     }
     return true;
   }
