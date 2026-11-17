@@ -1,0 +1,10 @@
+{
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile.synthetic"
+  },
+  "deploy": {
+    "restartPolicyType": "NEVER",
+    "numReplicas": 1
+  }
+}

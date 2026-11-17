@@ -1,0 +1,73 @@
+name: Synthetic gateway tests
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [fix/pilot-safe-gateway]
+permissions:
+  contents: read
+jobs:
+  synthetic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test test/gateway.test.mjs
+
+  # Real PostgreSQL integration tests against a disposable, job-scoped database.
+  # The container exists only for the life of this job; nothing here touches
+  # Railway, GHL, Trulli, or any shared database.
+  postgres-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # Throwaway credentials for an ephemeral CI-only container on localhost.
+          POSTGRES_USER: synthetic
+          POSTGRES_PASSWORD: synthetic_ci_only
+          POSTGRES_DB: gateway_synthetic_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U synthetic -d gateway_synthetic_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - name: PostgreSQL integration suite
+        env:
+          SYNTHETIC_TEST_ONLY: 'true'
+          TEST_DATABASE_URL: postgresql://synthetic:synthetic_ci_only@localhost:5432/gateway_synthetic_ci
+        run: npm run test:integration
+      - name: Container smoke test - default posture, delivery disabled
+        env:
+          DB: postgresql://synthetic:synthetic_ci_only@localhost:5432/gateway_synthetic_ci
+          SECRET: ci-container-smoke-secret-0123456789abcdef
+        run: |
+          set -euo pipefail
+          docker build -t mca-gateway:ci .
+          docker run -d --name gw --network host -e DATABASE_URL="$DB" -e GATEWAY_WEBHOOK_SECRET="$SECRET" -e PORT=8080 mca-gateway:ci
+          for i in $(seq 1 30); do curl -sf localhost:8080/healthz && break; sleep 1; done
+          health=$(curl -sf localhost:8080/healthz); echo "$health"
+          echo "$health" | grep -q '"delivery":"disabled"'
+          body='{"event_id":"synthetic-container-smoke","consent_granted":true,"consent_source":"synthetic","consent_timestamp":"2026-11-17T00:00:00Z"}'
+          sig="sha256=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $NF}')"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "x-gateway-signature: $sig" -d "$body" localhost:8080/webhooks/intake)
+          test "$code" = 202
+          bad=$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H 'x-gateway-signature: sha256=00' -d "$body" localhost:8080/webhooks/intake)
+          test "$bad" = 401
+          sleep 3
+          state=$(docker run --rm --network host postgres:16 psql "$DB" -tAc "select state||':'||attempts from intake_events where id='synthetic-container-smoke'")
+          echo "state=$state"; test "$state" = "pending:0"
+          docker logs gw > container.log 2>&1; cat container.log
+          ! grep -q -e "$SECRET" -e 'consent_source' container.log
+          docker stop -t 10 gw

@@ -1,0 +1,16 @@
+{
+  "name": "mca-intake-gateway",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/main.mjs",
+    "test": "node --test test/gateway.test.mjs",
+    "test:integration": "node --test --test-concurrency=1 test/postgres.integration.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
