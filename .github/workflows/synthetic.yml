@@ -48,3 +48,26 @@ jobs:
           SYNTHETIC_TEST_ONLY: 'true'
           TEST_DATABASE_URL: postgresql://synthetic:synthetic_ci_only@localhost:5432/gateway_synthetic_ci
         run: npm run test:integration
+      - name: Container smoke test (default posture: delivery disabled)
+        env:
+          DB: postgresql://synthetic:synthetic_ci_only@localhost:5432/gateway_synthetic_ci
+          SECRET: ci-container-smoke-secret-0123456789abcdef
+        run: |
+          set -euo pipefail
+          docker build -t mca-gateway:ci .
+          docker run -d --name gw --network host -e DATABASE_URL="$DB" -e GATEWAY_WEBHOOK_SECRET="$SECRET" -e PORT=8080 mca-gateway:ci
+          for i in $(seq 1 30); do curl -sf localhost:8080/healthz && break; sleep 1; done
+          health=$(curl -sf localhost:8080/healthz); echo "$health"
+          echo "$health" | grep -q '"delivery":"disabled"'
+          body='{"event_id":"synthetic-container-smoke","consent_granted":true,"consent_source":"synthetic","consent_timestamp":"2026-11-17T00:00:00Z"}'
+          sig="sha256=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $NF}')"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "x-gateway-signature: $sig" -d "$body" localhost:8080/webhooks/intake)
+          test "$code" = 202
+          bad=$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H 'x-gateway-signature: sha256=00' -d "$body" localhost:8080/webhooks/intake)
+          test "$bad" = 401
+          sleep 3
+          state=$(docker run --rm --network host postgres:16 psql "$DB" -tAc "select state||':'||attempts from intake_events where id='synthetic-container-smoke'")
+          echo "state=$state"; test "$state" = "pending:0"
+          docker logs gw > container.log 2>&1; cat container.log
+          ! grep -q -e "$SECRET" -e 'consent_source' container.log
+          docker stop -t 10 gw
