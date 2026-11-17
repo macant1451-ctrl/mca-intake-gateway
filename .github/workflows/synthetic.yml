@@ -48,7 +48,7 @@ jobs:
           SYNTHETIC_TEST_ONLY: 'true'
           TEST_DATABASE_URL: postgresql://synthetic:synthetic_ci_only@localhost:5432/gateway_synthetic_ci
         run: npm run test:integration
-      - name: Container smoke test (default posture: delivery disabled)
+      - name: Container smoke test - default posture, delivery disabled
         env:
           DB: postgresql://synthetic:synthetic_ci_only@localhost:5432/gateway_synthetic_ci
           SECRET: ci-container-smoke-secret-0123456789abcdef
